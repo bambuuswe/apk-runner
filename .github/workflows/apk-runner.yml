@@ -68,7 +68,8 @@ jobs:
 
   build-ios:
     name: Build UTM (${{ matrix.scheme }})
-    runs-on: macos-26
+    # UTM uses iOS 27 SDK APIs, so it needs Xcode 27 (GitHub's xcode-27 preview image)
+    runs-on: xcode-27
     timeout-minutes: 120
     strategy:
       fail-fast: false
@@ -95,7 +96,9 @@ jobs:
           ls -d sysroot*
       - name: Setup Xcode
         run: |
-          [[ "$(xcode-select -p)" == "/Applications/Xcode.app"* ]] || sudo xcode-select -s /Applications/Xcode.app
+          ls -d /Applications/Xcode*.app
+          XCODE=$(ls -d /Applications/Xcode_27*.app | sort -V | tail -n 1)
+          sudo xcode-select -s "$XCODE"
           xcodebuild -version
       - name: Build
         run: |
