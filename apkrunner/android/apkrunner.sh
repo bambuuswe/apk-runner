@@ -70,13 +70,45 @@ case "$CMDLINE" in
     ;;
 esac
 
-log "ready, waiting for APKs from $HOST:$PORT"
+netstate() {
+    echo "$(ip -4 addr show 2>&1 | grep inet | tr -s ' ' | tr '\n' ';') rules: $(ip rule 2>&1 | grep -c .)"
+}
 
+# Make sure the host (QEMU user networking, always 10.0.2.2) is reachable from
+# this root service even if Android has not set up the network: give eth0 the
+# address QEMU's DHCP would hand out and route 10.0.2.0/24 through the main table,
+# since Android's policy routing drops traffic from sockets netd did not mark.
+ensure_route() {
+    IFACE=eth0
+    ip link set $IFACE up 2> /dev/null
+    if ! ip -4 addr show $IFACE 2> /dev/null | grep -q inet; then
+        ip addr add 10.0.2.15/24 dev $IFACE 2> /dev/null && log "configured $IFACE manually"
+    fi
+    ip route add 10.0.2.0/24 dev $IFACE table main 2> /dev/null
+    if ! ip rule 2> /dev/null | grep -q "to 10.0.2.0/24"; then
+        ip rule add to 10.0.2.0/24 lookup main pref 99 2> /dev/null && log "added host route rule"
+    fi
+}
+
+log "ready, waiting for APKs from $HOST:$PORT"
+log "network before: $(netstate)"
+ensure_route
+log "network after: $(netstate)"
+
+TRIES=0
 while true; do
     APK=$DIR/incoming.apk
     rm -f $APK $APK.part
-    $FETCH $HOST $PORT $APK
+    ERR=$($FETCH $HOST $PORT $APK 2>&1)
     RC=$?
+    TRIES=$((TRIES + 1))
+    if [ $RC -ne 0 ] && [ -n "$ERR" ]; then
+        if [ $TRIES -le 3 ] || [ $((TRIES % 60)) -eq 0 ]; then
+            log "fetch attempt $TRIES: $ERR"
+        fi
+        # Android may reconfigure the network later, so keep the route in place
+        [ $((TRIES % 15)) -eq 0 ] && ensure_route
+    fi
     if [ $RC -eq 0 ]; then
         log "received $(wc -c < $APK) bytes"
         notify "Installing app..."

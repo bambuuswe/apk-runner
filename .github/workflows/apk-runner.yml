@@ -48,7 +48,7 @@ jobs:
       - name: Test opening an APK
         run: |
           qemu-img create -f qcow2 -b "$PWD/AndroidVM/android.qcow2" -F qcow2 "$RUNNER_TEMP/test.qcow2"
-          python3 apkrunner/ci/boot_test.py --vm AndroidVM --image "$RUNNER_TEMP/test.qcow2" --mode test --apk "$RUNNER_TEMP/test.apk" --outdir boot-test --timeout 1200
+          python3 apkrunner/ci/boot_test.py --vm AndroidVM --image "$RUNNER_TEMP/test.qcow2" --mode test --apk "$RUNNER_TEMP/test.apk" --outdir boot-test --timeout 480
       - name: Upload boot logs and screenshots
         if: always()
         uses: actions/upload-artifact@v4

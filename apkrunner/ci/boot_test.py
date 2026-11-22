@@ -102,6 +102,36 @@ def screenshot(qmp, path):
         print(f"screenshot failed: {e}", flush=True)
 
 
+DIAGNOSTICS = [
+    "echo ==== diagnostics",
+    "ip addr",
+    "ip rule",
+    "ip route show table all",
+    "getprop | grep -iE 'dhcp|net\\.|eth|wifi'",
+    "dumpsys connectivity | head -40",
+    "cat /data/local/tmp/apkrunner/log.txt",
+    "ps -A | grep -iE 'apk|dhcp'",
+    "logcat -d -s EthernetTracker IpClient Ethernet EthernetNetworkFactory | tail -40",
+    "echo ==== end",
+]
+
+
+def console_diagnostics(path):
+    """Types commands into the guest's root console; output lands in serial.log."""
+    try:
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        s.connect(path)
+        s.sendall(b"\n")
+        time.sleep(1)
+        for cmd in DIAGNOSTICS:
+            s.sendall(cmd.encode() + b"\n")
+            time.sleep(2)
+        time.sleep(3)
+        s.close()
+    except OSError as e:
+        print(f"console diagnostics failed: {e}", flush=True)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--vm", required=True, help="AndroidVM directory")
@@ -127,9 +157,11 @@ def main():
 
     accel = "kvm" if os.access("/dev/kvm", os.R_OK | os.W_OK) else "tcg"
     serial_log = os.path.join(args.outdir, "serial.log")
+    serial_sock = os.path.join(args.outdir, "serial.sock")
     qmp_path = os.path.join(args.outdir, "qmp.sock")
-    if os.path.exists(qmp_path):
-        os.remove(qmp_path)
+    for path in (qmp_path, serial_sock, serial_log):
+        if os.path.exists(path):
+            os.remove(path)
     qemu = [
         "qemu-system-x86_64",
         "-machine", f"q35,accel={accel}",
@@ -149,7 +181,10 @@ def main():
         "-device", "usb-tablet",
         "-device", "usb-kbd",
         "-device", "virtio-rng-pci",
-        "-serial", f"file:{serial_log}",
+        # the guest runs a root shell on the serial console (userdebug build);
+        # the socket lets this script type diagnostics into it
+        "-chardev", f"socket,id=ser0,path={serial_sock},server=on,wait=off,logfile={serial_log}",
+        "-serial", "chardev:ser0",
         "-qmp", f"unix:{qmp_path},server=on,wait=off",
         "-no-reboot",
     ]
@@ -199,6 +234,7 @@ def main():
             print(f"guest powered off after {elapsed}s (exit {proc.returncode}), setup marker found: {marker}", flush=True)
     else:
         if proc.poll() is None:
+            console_diagnostics(serial_sock)
             try:
                 qmp.cmd("quit")
             except Exception:  # noqa: BLE001
@@ -208,8 +244,8 @@ def main():
         print(f"test {'passed' if success else 'FAILED'} after {elapsed}s", flush=True)
     proc.wait(timeout=60)
     with open(serial_log, errors="replace") as f:
-        print("--- serial console (last 40 lines)", flush=True)
-        print("".join(f.readlines()[-40:]), flush=True)
+        print("--- serial console (last 200 lines)", flush=True)
+        print("".join(f.readlines()[-200:]), flush=True)
     sys.exit(0 if success else 1)
 
 

@@ -52,6 +52,7 @@ int main(int argc, char **argv) {
     }
     int sock = socket(AF_INET, SOCK_STREAM, 0);
     if (sock < 0) {
+        fprintf(stderr, "socket: %s\n", strerror(errno));
         return 1;
     }
     /* generous timeouts: the guest is emulated and can be very slow */
@@ -59,11 +60,13 @@ int main(int argc, char **argv) {
     setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
     setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
     if (connect(sock, (struct sockaddr *)&addr, sizeof(addr)) != 0) {
+        fprintf(stderr, "connect: %s\n", strerror(errno));
         close(sock);
         return 1;
     }
     unsigned char header[8];
     if (read_full(sock, header, sizeof(header)) != 0) {
+        fprintf(stderr, "read header: %s\n", strerror(errno));
         close(sock);
         return 1;
     }
