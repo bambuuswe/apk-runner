@@ -33,7 +33,7 @@ if [ ! -f "$WORK/android.iso" ]; then
     curl -fL --retry 5 --retry-delay 10 -o "$WORK/android.iso" "$ISO_URL"
 fi
 ls -la "$WORK/android.iso"
-sha256sum "$WORK/android.iso"
+echo "${ISO_SHA256:-f7eb8fc56f29ad5432335dc054183acf086c539f3990f0b6e9ff58bd6df4604e}  $WORK/android.iso" | sha256sum -c -
 
 section "Extracting ISO"
 rm -rf "$WORK/iso"
@@ -59,16 +59,16 @@ mkdir -p "$WORK/ramdisk"
 (cd "$WORK/ramdisk" && zcat "$WORK/iso/ramdisk.img" | sudo cpio -idm --quiet)
 ls -la "$WORK/ramdisk"
 for prop in default.prop prop.default; do
-    if [ -f "$WORK/ramdisk/$prop" ]; then
+    if sudo test -f "$WORK/ramdisk/$prop"; then
         echo "--- $prop"
-        grep -E "ro\.(debuggable|secure|adb|build\.type)|selinux" "$WORK/ramdisk/$prop" || true
+        sudo grep -E "ro\.(debuggable|secure|adb|build\.type)|selinux" "$WORK/ramdisk/$prop" || true
     fi
 done
 sudo mkdir -p "$WORK/ramdisk/apkrunner"
 sudo install -m 0755 "$WORK/apkfetch" "$WORK/ramdisk/apkrunner/apkfetch"
 sudo install -m 0755 "$HERE/android/apkrunner.sh" "$WORK/ramdisk/apkrunner/apkrunner.sh"
 sudo sh -c "cat '$HERE/android/apkrunner.rc' >> '$WORK/ramdisk/init.rc'"
-tail -n 15 "$WORK/ramdisk/init.rc"
+sudo tail -n 15 "$WORK/ramdisk/init.rc"
 (cd "$WORK/ramdisk" && sudo sh -c 'find . | LC_ALL=C sort | cpio -o -H newc -R root:root --quiet | gzip -9') > "$WORK/ramdisk.img"
 ls -la "$WORK/iso/ramdisk.img" "$WORK/ramdisk.img"
 
@@ -81,13 +81,13 @@ sudo mkdir -p /mnt/androidsys
 if sudo mount -o loop,ro "$WORK/sfs/system.img" /mnt/androidsys; then
     SYSROOT=/mnt/androidsys
     [ -d /mnt/androidsys/system ] && SYSROOT=/mnt/androidsys/system
-    grep -E "ro\.build\.(type|version\.release|display\.id)|ro\.product\.cpu\.abilist|nativebridge" "$SYSROOT/build.prop" || true
+    sudo grep -E "ro\.build\.(type|version\.release|display\.id)|ro\.product\.cpu\.abilist|nativebridge" "$SYSROOT/build.prop" || true
     echo "--- enable_nativebridge"
     sudo cat "$SYSROOT/bin/enable_nativebridge" 2>/dev/null | head -n 80 || echo "(missing)"
     echo "--- etc/init"
-    ls "$SYSROOT/etc/init" | head -n 80 || true
+    sudo ls "$SYSROOT/etc/init" | head -n 80 || true
     echo "--- toybox / tools"
-    ls "$SYSROOT/bin" | grep -E "^(nc|netcat|wget|curl|busybox|toybox|monkey|pm|am|cmd|svc|settings|locksettings|input|wm)$" || true
+    sudo ls "$SYSROOT/bin" | grep -E "^(nc|netcat|wget|curl|busybox|toybox|monkey|pm|am|cmd|svc|settings|locksettings|input|wm)$" || true
     sudo umount /mnt/androidsys
 fi
 sudo rm -rf "$WORK/sfs"
