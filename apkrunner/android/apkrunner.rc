@@ -1,0 +1,11 @@
+
+# APK Runner: installs and launches APKs sent from the iOS app
+service apkrunner /system/bin/sh /apkrunner/apkrunner.sh
+    class late_start
+    user root
+    group root
+    disabled
+    oneshot
+
+on property:sys.boot_completed=1
+    start apkrunner

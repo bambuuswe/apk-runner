@@ -1,0 +1,180 @@
+name: APK Runner
+on:
+  push:
+    branches:
+      - 'main'
+    paths-ignore:
+      - '**.md'
+  workflow_dispatch:
+    inputs:
+      release:
+        description: 'Publish a GitHub release with the IPAs'
+        required: true
+        default: 'false'
+
+env:
+  # UTM v5.0.9-2 release build: its prebuilt dependencies (QEMU etc.) are reused
+  # instead of compiling them for hours. They expire on 2027-02-16.
+  UPSTREAM_REPO: utmapp/UTM
+  UPSTREAM_RUN_ID: '44272292460'
+
+jobs:
+  android-image:
+    name: Build and test Android image
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Install tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools qemu-system-x86 qemu-utils p7zip-full squashfs-tools cpio imagemagick
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          ls -la /dev/kvm || echo "no KVM, tests will be slow"
+      - name: Build Android image
+        run: bash apkrunner/build_android_image.sh
+        env:
+          WORK: ${{ runner.temp }}/android-build
+          OUT: ${{ github.workspace }}/AndroidVM
+      - name: First boot (done here so the phone does not have to)
+        run: python3 apkrunner/ci/boot_test.py --vm AndroidVM --mode firstboot --outdir boot-firstboot --timeout 1500
+      - name: Build test APK
+        run: bash apkrunner/ci/build_test_apk.sh "$RUNNER_TEMP/test.apk"
+      - name: Test opening an APK
+        run: |
+          qemu-img create -f qcow2 -b "$PWD/AndroidVM/android.qcow2" -F qcow2 "$RUNNER_TEMP/test.qcow2"
+          python3 apkrunner/ci/boot_test.py --vm AndroidVM --image "$RUNNER_TEMP/test.qcow2" --mode test --apk "$RUNNER_TEMP/test.apk" --outdir boot-test --timeout 1200
+      - name: Upload boot logs and screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-boot-logs
+          path: |
+            boot-*/*.png
+            boot-*/*.log
+          if-no-files-found: ignore
+      - name: Upload Android image
+        uses: actions/upload-artifact@v4
+        with:
+          name: AndroidVM
+          path: AndroidVM
+          compression-level: 0
+          retention-days: 30
+
+  build-ios:
+    name: Build UTM (${{ matrix.scheme }})
+    runs-on: macos-26
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - scheme: iOS
+            platform: ios
+          - scheme: iOS-SE
+            platform: ios-tci
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Download prebuilt dependencies
+        uses: actions/download-artifact@v4
+        with:
+          name: Sysroot-${{ matrix.platform }}-arm64
+          repository: ${{ env.UPSTREAM_REPO }}
+          run-id: ${{ env.UPSTREAM_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Extract dependencies
+        run: |
+          tar -xf sysroot.tgz
+          rm sysroot.tgz
+          ls -d sysroot*
+      - name: Setup Xcode
+        run: |
+          [[ "$(xcode-select -p)" == "/Applications/Xcode.app"* ]] || sudo xcode-select -s /Applications/Xcode.app
+          xcodebuild -version
+      - name: Build
+        run: |
+          ./scripts/build_utm.sh -k iphoneos -s ${{ matrix.scheme }} -a arm64 -o UTM
+          tar -acf UTM.xcarchive.tgz UTM.xcarchive
+      - name: Upload archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: UTM-${{ matrix.scheme }}
+          path: UTM.xcarchive.tgz
+          retention-days: 7
+
+  package:
+    name: Package ${{ matrix.out }}
+    needs: [android-image, build-ios]
+    runs-on: macos-26
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - scheme: iOS
+            mode: ipa
+            app: UTM.app
+            ipa: UTM.ipa
+            out: APKRunner.ipa
+          - scheme: iOS-SE
+            mode: ipa-se
+            app: UTM SE.app
+            ipa: UTM SE.ipa
+            out: APKRunner-SE.ipa
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Download app archive
+        uses: actions/download-artifact@v4
+        with:
+          name: UTM-${{ matrix.scheme }}
+      - name: Download Android image
+        uses: actions/download-artifact@v4
+        with:
+          name: AndroidVM
+          path: AndroidVM
+      - name: Install ldid
+        run: brew install ldid
+      - name: Add Android image and fakesign
+        run: |
+          tar -xf UTM.xcarchive.tgz
+          cp -R AndroidVM "UTM.xcarchive/Products/Applications/${{ matrix.app }}/AndroidVM"
+          mkdir out
+          ./scripts/package.sh ${{ matrix.mode }} UTM.xcarchive out
+          mv "out/${{ matrix.ipa }}" "${{ matrix.out }}"
+          ls -la "${{ matrix.out }}"
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.out }}
+          path: ${{ matrix.out }}
+          compression-level: 0
+
+  release:
+    name: Publish release
+    needs: package
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.release == 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Download IPAs
+        uses: actions/download-artifact@v4
+        with:
+          pattern: APKRunner*.ipa
+          merge-multiple: true
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ls -la
+          TAG="apk-runner-${GITHUB_RUN_NUMBER}"
+          gh release create "$TAG" APKRunner.ipa APKRunner-SE.ipa \
+            --repo "$GITHUB_REPOSITORY" --title "APK Runner build ${GITHUB_RUN_NUMBER}" \
+            --notes "Unsigned IPAs. APKRunner.ipa needs JIT enabled (e.g. StikDebug/SideStore). APKRunner-SE.ipa works without JIT but is much slower."

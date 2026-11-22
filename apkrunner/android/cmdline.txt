@@ -1,0 +1,1 @@
+root=/dev/ram0 androidboot.selinux=permissive SRC=/android HWACCEL=0 SETUPWIZARD=0 DPI=240 video=540x960 quiet
