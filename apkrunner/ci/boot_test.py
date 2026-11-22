@@ -192,9 +192,11 @@ def main():
             screenshot(qmp, os.path.join(args.outdir, "final.png"))
             proc.kill()
         else:
+            # only apkrunner.sh powers the guest off, after Android finished booting
             with open(serial_log, errors="replace") as f:
-                success = "first boot setup done" in f.read()
-            print(f"guest powered off after {elapsed}s, setup marker found: {success}", flush=True)
+                marker = "first boot setup done" in f.read()
+            success = proc.returncode == 0
+            print(f"guest powered off after {elapsed}s (exit {proc.returncode}), setup marker found: {marker}", flush=True)
     else:
         if proc.poll() is None:
             try:
@@ -205,6 +207,9 @@ def main():
             print(f"[server] guest polled {server.polls} times", flush=True)
         print(f"test {'passed' if success else 'FAILED'} after {elapsed}s", flush=True)
     proc.wait(timeout=60)
+    with open(serial_log, errors="replace") as f:
+        print("--- serial console (last 40 lines)", flush=True)
+        print("".join(f.readlines()[-40:]), flush=True)
     sys.exit(0 if success else 1)
 
 

@@ -12,6 +12,8 @@ FETCH=/apkrunner/apkfetch
 mkdir -p $DIR
 
 log() {
+    # Android-x86 hides kernel messages from the console, so write to it directly too
+    echo "apkrunner: $*" > /dev/console 2> /dev/null
     echo "<3>apkrunner: $*" > /dev/kmsg
     echo "$(date '+%Y-%m-%d %H:%M:%S') $*" >> $DIR/log.txt
 }
@@ -30,6 +32,13 @@ settings put system screen_off_timeout 2147483647
 settings put global stay_on_while_plugged_in 7
 locksettings set-disabled true > /dev/null 2>&1
 svc power stayon true
+
+# Android-x86 ships two launchers and asks which one to use on every boot;
+# keep the normal one (Quickstep) by turning off Taskbar
+for PKG in $(pm list packages -e | grep -i taskbar | sed 's/^package://'); do
+    pm disable-user --user 0 "$PKG" > /dev/null 2>&1 && log "disabled launcher $PKG"
+done
+input keyevent 3
 input keyevent 224
 wm dismiss-keyguard > /dev/null 2>&1
 
